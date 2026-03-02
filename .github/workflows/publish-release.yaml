@@ -12,22 +12,28 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # 1. 提前登录，确保后续检查镜像是否存在时有权访问
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Variable Gathering
         id: gathervars
         run: |
           NOT_PREVIOUSLY_PUBLISHED=0
           
-          # 【关键修复】在 Shell 中将仓库名转为小写
-          # GITHUB_REPOSITORY 是环境变量，例如 M1saka10010/headscale-ui
-          # 这里将其转换为 m1saka10010/headscale-ui
+          # 【修复1】将仓库名转为小写，解决 "repository name must be lowercase" 报错
           REPO_LOWER="${GITHUB_REPOSITORY,,}"
           echo "REPO_LOWER=$REPO_LOWER" >> $GITHUB_ENV
-
+          
           VERSION=$(jq -r '.version' ./package.json)
           echo "BUILD_DATE=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_ENV
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-          # setting tags (使用小写的变量 REPO_LOWER)
+          # 设置标签 (使用小写的 REPO_LOWER 变量)
           if echo "$VERSION" | grep -q "beta"; then
             echo "TAGS=ghcr.io/${REPO_LOWER}:beta,ghcr.io/${REPO_LOWER}:$VERSION,ghcr.io/${REPO_LOWER}:latest" >> $GITHUB_ENV
           else
@@ -35,7 +41,7 @@ jobs:
           fi
           echo "PRIMARY_TAG=latest" >> $GITHUB_ENV
           
-          # check if version has already been published (检查时也使用小写变量)
+          # 检查版本是否已发布 (使用小写变量)
           $(docker manifest inspect ghcr.io/${REPO_LOWER}:$VERSION > /dev/null) || NOT_PREVIOUSLY_PUBLISHED=1
           echo "NOT_PREVIOUSLY_PUBLISHED=$NOT_PREVIOUSLY_PUBLISHED" >> $GITHUB_ENV
 
@@ -45,14 +51,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to the Container registry
-        uses: docker/login-action@v3
-        if: ${{ env.NOT_PREVIOUSLY_PUBLISHED != 0 }}
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build and push Docker Image
         uses: docker/build-push-action@v6
         if: ${{ env.NOT_PREVIOUSLY_PUBLISHED != 0 }}
@@ -61,9 +59,9 @@ jobs:
             BUILD_DATE=${{ env.BUILD_DATE }}
             VERSION=${{ env.VERSION }}
           context: ./docker/production
-          tags: |
-            ${{ env.TAGS }}
-          platforms: linux/amd64,linux/arm/v7,linux/arm64/v8
+          tags: ${{ env.TAGS }}
+          # 【修复2】移除了 linux/arm/v7，解决 "no match for platform" 报错
+          platforms: linux/amd64,linux/arm64/v8
           push: true
 
       - name: Extract build out of docker image
@@ -71,7 +69,7 @@ jobs:
         if: ${{ env.NOT_PREVIOUSLY_PUBLISHED != 0 }}
         id: extract
         with:
-          # 【关键修复】这里也要使用小写的环境变量
+          # 使用小写变量
           image: ghcr.io/${{ env.REPO_LOWER }}:${{ env.PRIMARY_TAG }}
           path: web
           
@@ -88,7 +86,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ env.VERSION }}
-          name: headscale-ui
+          name: headscale-ui ${{ env.VERSION }}
           files: ${{ steps.extract.outputs.destination }}/headscale-ui.zip
           generate_release_notes: true
           make_latest: true
